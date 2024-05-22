@@ -23,6 +23,10 @@ fn main() {
 }
 */
 
+use crossterm::{
+    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    ExecutableCommand,
+};
 use futures::select;
 use futures::FutureExt;
 
@@ -51,8 +55,16 @@ async fn try_main(addr: impl ToSocketAddrs) -> Result<()> {
         select! {
             line = lines_from_server.next().fuse() => match line {
                 Some(line) => {
-                    let line = line?;
-                    println!("{}", line);
+                    let _line = line?;
+                    std::io::stdout()
+                    .execute(SetForegroundColor(Color::Black))
+                    .unwrap()
+                    .execute(SetBackgroundColor(Color::White))
+                    .unwrap()
+                    .execute(Print(format!("{}\n", _line)))
+                    .unwrap()
+                    .execute(ResetColor)
+                    .unwrap();
                 },
                 None => break,
             },
