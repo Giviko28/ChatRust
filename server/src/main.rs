@@ -68,7 +68,7 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         None => Err("peer disconnected immediately")?,
         Some(line) => line?,
     };
-    println!("name = \"{}\"", name);
+    println!("new user created: \"{}\"", name);
     let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
     broker
         .send(Event::NewPeer {
@@ -145,6 +145,7 @@ enum Event {
         msg: String,
     },
 }
+
 async fn broker_loop(events: Receiver<Event>) -> Result<()> {
     // make sure, messages read in "connection_loop" get to relevant "connection_writer_loop"
     let (disconnect_sender, mut disconnect_receiver) =
@@ -168,6 +169,7 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
             Event::Message { from, to, msg } => {
                 for addr in to {
                     if let Some(peer) = peers.get_mut(&addr) {
+                        println!("a Message was sent by \"{}\" to \"{}\"", from, addr);
                         let msg = format!("Message from \"{}\": {}\n", from, msg);
                         peer.send(msg).await.unwrap()
                     }
