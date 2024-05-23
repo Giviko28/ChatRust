@@ -1,3 +1,10 @@
+# Setup
+
+For now
+using the terminal go inside the database folder and run the main.rs in the src using cargo run. This runs all the migrations to get you going, please do not forget to change the database settings before running. will do the env thing later.
+
+
+
 # Chat server template
 
 This is a template for writing a chat server and client as your ASP lab project. It contains three projects:

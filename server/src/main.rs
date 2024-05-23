@@ -6,6 +6,7 @@
 //   - What would be the benefits and drawbacks of each approach?
 // - Do you want/need some form of user management? If so, how would that look like?
 
+
 extern crate async_std;
 use async_std::{
     io::BufReader,
@@ -17,7 +18,7 @@ use async_std::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
-
+use postgres::{Client, NoTls};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
@@ -205,5 +206,16 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
 }
 
 pub(crate) fn main() -> Result<()> {
-    task::block_on(accept_loop("127.0.0.1:8888"))
+    let mut client = Client::connect("host=localhost port=7777 user=postgres password=mysecretpassword", NoTls)?;
+    client.batch_execute("
+        CREATE TABLE IF NOT EXISTS person (
+            id      SERIAL PRIMARY KEY,
+            name    TEXT NOT NULL,
+            data    BYTEA
+        )
+    ")?;
+    Ok(())
+    // task::block_on(accept_loop("127.0.0.1:8888"))
 }
+
+
