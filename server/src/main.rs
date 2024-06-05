@@ -189,8 +189,10 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
                 for addr in to {
                     if let Some(peer) = peers.get_mut(&addr) {
                         println!("a Message was sent by \"{}\" to \"{}\"", from, addr);
-                        let msg = format!("Message from \"{}\": {}\n", from, msg);
-                        peer.send(msg).await.unwrap()
+                        let formatted_msg = format!("Message from \"{}\": {}\n", from, msg);
+                        peer.send(formatted_msg).await.unwrap();
+                        // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
+                        save_message(from.clone(), addr.clone(), msg.clone()).unwrap()
                     }
                 }
             }
@@ -257,6 +259,14 @@ fn save_user(name: &str) -> Result<()> {
     // Execute the SQL statement with the user's name as a parameter
     db.execute(&statement, &[&name])?;
 
+    Ok(())
+}
+
+fn save_message(from: String, to: String, msg: String) -> Result<()> {
+    std::thread::spawn(move || {
+        let mut db = DB_CONNECTION.lock().unwrap();
+        db.execute("INSERT INTO messages (sender, receiver, message) VALUES ($1, $2, $3)", &[&from, &to, &msg]).unwrap();
+    }).join().unwrap();;
     Ok(())
 }
 
