@@ -20,17 +20,17 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use futures::channel::mpsc;
-use std::sync::Mutex;
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
 use postgres::{Client, NoTls};
+use std::fmt::Error;
+use std::sync::Mutex;
 use std::{
     collections::hash_map::{Entry, HashMap},
     future::Future,
     sync::Arc,
 };
-use std::fmt::Error;
-use futures::channel::mpsc::UnboundedReceiver;
 
 fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()>
 // logging errors but continuing maintaining the server
@@ -74,7 +74,6 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         None => Err("peer disconnected immediately")?,
         Some(line) => line?,
     };
-
 
     if (is_new_user(&name)) {
         println!("new user created: \"{}\"", name);
@@ -226,12 +225,15 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
 
 lazy_static! {
     static ref DB_CONNECTION: Mutex<Client> = Mutex::new(
-        Client::connect("host=localhost port=7777 user=postgres password=mysecretpassword dbname=postgres", NoTls).unwrap()
+        Client::connect(
+            "host=localhost port=7777 user=postgres password=mysecretpassword dbname=postgres",
+            NoTls
+        )
+        .unwrap()
     );
     static ref USERS_NOW: HashMap<String, Sender<String>> = HashMap::new();
     static ref USERS_IN_DB: Mutex<Vec<String>> = Mutex::new(load_users());
 }
-
 
 fn load_users() -> Vec<String> {
     let mut db = DB_CONNECTION.lock().unwrap();
@@ -264,8 +266,14 @@ fn save_user(name: &str) -> Result<()> {
 fn save_message(from: String, to: String, msg: String) -> Result<()> {
     std::thread::spawn(move || {
         let mut db = DB_CONNECTION.lock().unwrap();
-        db.execute("INSERT INTO messages (sender, receiver, message) VALUES ($1, $2, $3)", &[&from, &to, &msg]).unwrap();
-    }).join().unwrap();;
+        db.execute(
+            "INSERT INTO messages (sender, receiver, message) VALUES ($1, $2, $3)",
+            &[&from, &to, &msg],
+        )
+        .unwrap();
+    })
+    .join()
+    .unwrap();
     Ok(())
 }
 
@@ -297,7 +305,15 @@ mod tests {
     fn test_load_users() {}
 
     #[test]
-    fn test_is_new_user() {}
+    fn test_is_new_user() {
+        assert_eq!(is_new_user("Bob"), true);
+        assert_eq!(is_new_user("Alice"), true);
+        assert_eq!(is_new_user("Bob"), false);
+        assert_eq!(is_new_user("Alice"), false);
+    }
+
+    #[test]
+    fn test_save_user() {}
 
     #[test]
     fn test_save_message() {}
