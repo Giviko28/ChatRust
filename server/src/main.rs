@@ -7,6 +7,8 @@
 // - Do you want/need some form of user management? If so, how would that look like?
 
 extern crate async_std;
+#[macro_use]
+extern crate lazy_static;
 use async_std::{
     io::BufReader,
     net::TcpStream,
@@ -18,6 +20,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use futures::channel::mpsc;
+use std::sync::Mutex;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
 use postgres::{Client, NoTls};
@@ -26,6 +29,8 @@ use std::{
     future::Future,
     sync::Arc,
 };
+use std::fmt::Error;
+use futures::channel::mpsc::UnboundedReceiver;
 
 fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()>
 // logging errors but continuing maintaining the server
@@ -59,6 +64,7 @@ async fn accept_loop(addr: impl ToSocketAddrs) -> Result<()> {
 }
 
 async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result<()> {
+    let mut test = stream.clone();
     let stream = Arc::new(stream);
     let reader = BufReader::new(&*stream); // incoming stream is read
     let mut lines = reader.lines(); // split incoming streams into lines (each line is a stringstream)
@@ -68,21 +74,21 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         None => Err("peer disconnected immediately")?,
         Some(line) => line?,
     };
-    println!("new user created: \"{}\"", name);
 
-    // Adding new user to the database
-    let mut client = Client::connect(
-        "host=localhost port=7777 user=postgres password
-    =mysecretpassword",
-        NoTls,
-    )?;
 
-    client.execute(
-        "INSERT INTO person (name, data) VALUES ($1, $2)",
-        &[&name, &None::<&[u8]>],
-    )?;
+    if (is_new_user(&name)) {
+        println!("new user created: \"{}\"", name);
+        let t_name = name.clone();
+        // basically, I'm not using async postgresql, so to avoid blocking the app I spawn a separate thread
+        std::thread::spawn(move || {
+            save_user(&*t_name).expect("TODO: panic message");
+        });
+        USERS_IN_DB.lock().unwrap().push(name.clone());
+    } else {
+        println!("An old user is back! his username is: \"{}\"", name);
+    }
 
-    let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
+    let (shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
     broker
         .send(Event::NewPeer {
             name: name.clone(),
@@ -165,7 +171,6 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
         mpsc::unbounded::<(String, Receiver<String>)>();
     let mut peers: HashMap<String, Sender<String>> = HashMap::new(); // maintaining all peers (users)
     let mut events = events.fuse();
-
     loop {
         let event = select! {
             event = events.next().fuse() => match event {
@@ -183,8 +188,10 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
                 for addr in to {
                     if let Some(peer) = peers.get_mut(&addr) {
                         println!("a Message was sent by \"{}\" to \"{}\"", from, addr);
-                        let msg = format!("Message from \"{}\": {}\n", from, msg);
-                        peer.send(msg).await.unwrap()
+                        let formatted_msg = format!("Message from \"{}\": {}\n", from, msg);
+                        peer.send(formatted_msg).await.unwrap();
+                        // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
+                        save_message(from.clone(), addr.clone(), msg.clone()).unwrap()
                     }
                 }
             }
@@ -217,20 +224,51 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn main() -> Result<()> {
-    let mut client = Client::connect(
-        "host=localhost port=7777 user=postgres password=mysecretpassword",
-        NoTls,
-    )?;
-    client.batch_execute(
-        "
-        CREATE TABLE IF NOT EXISTS person (
-            id      SERIAL PRIMARY KEY,
-            name    TEXT NOT NULL,
-            data    BYTEA
-        )
-    ",
-    )?;
+lazy_static! {
+    static ref DB_CONNECTION: Mutex<Client> = Mutex::new(
+        Client::connect("host=localhost port=7777 user=postgres password=mysecretpassword dbname=postgres", NoTls).unwrap()
+    );
+    static ref USERS_NOW: HashMap<String, Sender<String>> = HashMap::new();
+    static ref USERS_IN_DB: Mutex<Vec<String>> = Mutex::new(load_users());
+}
+
+
+fn load_users() -> Vec<String> {
+    let mut db = DB_CONNECTION.lock().unwrap();
+    let mut names = Vec::new();
+
+    for row in db.query("SELECT name FROM users", &[]).unwrap() {
+        let name: String = row.get(0);
+        names.push(name);
+    }
+
+    names
+}
+
+fn is_new_user(name: &str) -> bool {
+    !USERS_IN_DB.lock().unwrap().contains(&name.to_string())
+}
+
+fn save_user(name: &str) -> Result<()> {
+    let mut db = DB_CONNECTION.lock().unwrap();
+
+    // Prepare the SQL statement to insert a new user into the 'users' table
+    let statement = db.prepare("INSERT INTO users (name) VALUES ($1)")?;
+
+    // Execute the SQL statement with the user's name as a parameter
+    db.execute(&statement, &[&name])?;
+
     Ok(())
-    // task::block_on(accept_loop("127.0.0.1:8888"))
+}
+
+fn save_message(from: String, to: String, msg: String) -> Result<()> {
+    std::thread::spawn(move || {
+        let mut db = DB_CONNECTION.lock().unwrap();
+        db.execute("INSERT INTO messages (sender, receiver, message) VALUES ($1, $2, $3)", &[&from, &to, &msg]).unwrap();
+    }).join().unwrap();;
+    Ok(())
+}
+
+pub(crate) fn main() -> Result<()> {
+    task::block_on(accept_loop("127.0.0.1:8888"))
 }

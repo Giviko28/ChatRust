@@ -10,5 +10,7 @@ async-std = "1.12.0"
 futures = "0.3.0"
 chat_common = { path = "../common" }
 postgres = "0.19"
+lazy_static = "1.4.0"
+
 
 
