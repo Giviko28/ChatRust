@@ -272,3 +272,33 @@ fn save_message(from: String, to: String, msg: String) -> Result<()> {
 pub(crate) fn main() -> Result<()> {
     task::block_on(accept_loop("127.0.0.1:8888"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /*Server tests*/
+    #[test]
+    fn test_spawn_and_log_error() {}
+
+    #[test]
+    fn test_accept_loop() {}
+
+    #[test]
+    fn test_connection_loop() {}
+
+    #[test]
+    fn test_connection_writer_loop() {}
+
+    #[test]
+    fn test_broker_loop() {}
+
+    #[test]
+    fn test_load_users() {}
+
+    #[test]
+    fn test_is_new_user() {}
+
+    #[test]
+    fn test_save_message() {}
+}
