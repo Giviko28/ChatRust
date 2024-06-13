@@ -21,9 +21,12 @@ type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use futures::channel::mpsc;
 use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
 use postgres::{Client, NoTls};
+use std::fmt::Error;
+use std::sync::Mutex;
 use std::{any, error::Error, fmt::Error};
 
 use std::sync::Mutex;
@@ -293,4 +296,42 @@ fn save_message(
 
 pub(crate) fn main() -> Result<()> {
     task::block_on(accept_loop("127.0.0.1:8888"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /*Server tests*/
+    #[test]
+    fn test_spawn_and_log_error() {}
+
+    #[test]
+    fn test_accept_loop() {}
+
+    #[test]
+    fn test_connection_loop() {}
+
+    #[test]
+    fn test_connection_writer_loop() {}
+
+    #[test]
+    fn test_broker_loop() {}
+
+    #[test]
+    fn test_load_users() {}
+
+    #[test]
+    fn test_is_new_user() {
+        assert_eq!(is_new_user("Bob"), true);
+        assert_eq!(is_new_user("Alice"), true);
+        assert_eq!(is_new_user("Bob"), false);
+        assert_eq!(is_new_user("Alice"), false);
+    }
+
+    #[test]
+    fn test_save_user() {}
+
+    #[test]
+    fn test_save_message() {}
 }
