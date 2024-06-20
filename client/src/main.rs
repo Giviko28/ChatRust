@@ -80,11 +80,3 @@ async fn try_main(addr: impl ToSocketAddrs) -> Result<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_try_main() {}
-}

@@ -20,16 +20,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use futures::channel::mpsc;
-use futures::channel::mpsc::UnboundedReceiver;
-use futures::channel::mpsc::UnboundedReceiver;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
 use postgres::{Client, NoTls};
-use std::fmt::Error;
 use std::sync::Mutex;
-use std::{any, error::Error, fmt::Error};
 
-use std::sync::Mutex;
 use std::{
     collections::hash_map::{Entry, HashMap},
     future::Future,
@@ -79,7 +74,7 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         Some(line) => line?,
     };
 
-    if (is_new_user(&name)) {
+    if is_new_user(&name) {
         println!("new user created: \"{}\"", name);
         let t_name = name.clone();
         // basically, I'm not using async postgresql, so to avoid blocking the app I spawn a separate thread
@@ -194,7 +189,7 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
                         let formatted_msg = format!("Message from \"{}\": {}\n", from, msg);
                         peer.send(formatted_msg).await.unwrap();
                         // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
-                        match save_message(from.clone(), addr.clone(), msg.clone())? {
+                        match save_message(from.clone(), addr.clone(), msg.clone()) {
                             Ok(_) => (),
                             Err(e) => {
                                 eprintln!("Thread Error writing a Message to Database: {}", e)
@@ -304,22 +299,26 @@ mod tests {
 
     /*Server tests*/
     #[test]
-    fn test_spawn_and_log_error() {}
+    fn test_spawn_and_log_error() {
+        let fut = async { Ok(()) };
+        task::block_on(async {
+            spawn_and_log_error(fut).await;
+        });
+    }
 
     #[test]
-    fn test_accept_loop() {}
+    fn test_broker_loop() {
+        task::block_on(async {
+            let (sender, receiver) = mpsc::unbounded::<Event>();
+            assert!(broker_loop(receiver).await.is_ok());
+        });
+    }
 
     #[test]
-    fn test_connection_loop() {}
-
-    #[test]
-    fn test_connection_writer_loop() {}
-
-    #[test]
-    fn test_broker_loop() {}
-
-    #[test]
-    fn test_load_users() {}
+    fn test_load_users() {
+        let users = load_users();
+        assert!(!users.is_empty());
+    }
 
     #[test]
     fn test_is_new_user() {
@@ -330,8 +329,17 @@ mod tests {
     }
 
     #[test]
-    fn test_save_user() {}
+    fn test_save_user() {
+        let user = "NewTestUser";
+        assert!(save_user(user).is_ok());
+        assert!(!is_new_user(user));
+    }
 
     #[test]
-    fn test_save_message() {}
+    fn test_save_message() {
+        let from = "Alice";
+        let to = "Bob";
+        let msg = "Hello Bob";
+        assert!(save_message(from.to_string(), to.to_string(), msg.to_string()).is_ok());
+    }
 }

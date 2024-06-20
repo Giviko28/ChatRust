@@ -8,7 +8,11 @@
     <cargoProject FILE="$PROJECT_DIR$/Unit tests/src/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="374d4c70-7e46-4a95-bbba-20f9b1c9837f" name="Changes" comment="" />
+    <list default="true" id="374d4c70-7e46-4a95-bbba-20f9b1c9837f" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/client/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/client/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/server/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/server/src/main.rs" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -38,9 +42,11 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "Cargo.Test chat-server-x-5.executor": "Run",
+    "Cargo.Test main::tests.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.rust.reset.selective.auto.import": "true",
     "git-widget-placeholder": "DB",
+    "ignore.virus.scanning.warn.message": "true",
     "last_opened_file_path": "C:/Users/Livia/git/strings",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
@@ -53,7 +59,7 @@
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
-  <component name="RunManager" selected="Cargo.Test chat-server-x-5">
+  <component name="RunManager" selected="Cargo.Test main::tests">
     <configuration name="Run client" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
       <option name="command" value="run --package client --bin client" />
       <option name="workingDirectory" value="file://$PROJECT_DIR$" />
@@ -105,6 +111,28 @@
         <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
       </method>
     </configuration>
+    <configuration name="Test main::tests" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="test --package server --bin server tests" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Cargo.Test main::tests" />
+      </list>
+    </recent_temporary>
   </component>
   <component name="RustProjectSettings">
     <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
@@ -123,6 +151,7 @@
       <workItem from="1716587910990" duration="16000" />
       <workItem from="1716588103569" duration="2000" />
       <workItem from="1718287254613" duration="3747000" />
+      <workItem from="1718877763110" duration="470000" />
     </task>
     <servers />
   </component>
