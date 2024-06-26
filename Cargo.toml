@@ -1,1 +1,1 @@
-workspace = { members = [ "client","common", "server"], resolver = "2" }
+workspace = { members = [ "client","common", "server", "database"], resolver = "2" }

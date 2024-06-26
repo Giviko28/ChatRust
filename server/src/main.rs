@@ -7,6 +7,8 @@
 // - Do you want/need some form of user management? If so, how would that look like?
 
 extern crate async_std;
+#[macro_use]
+extern crate lazy_static;
 use async_std::{
     io::BufReader,
     net::TcpStream,
@@ -17,10 +19,12 @@ use async_std::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
-
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
+use postgres::{Client, NoTls};
+use std::sync::Mutex;
+
 use std::{
     collections::hash_map::{Entry, HashMap},
     future::Future,
@@ -59,6 +63,7 @@ async fn accept_loop(addr: impl ToSocketAddrs) -> Result<()> {
 }
 
 async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result<()> {
+    let mut test = stream.clone();
     let stream = Arc::new(stream);
     let reader = BufReader::new(&*stream); // incoming stream is read
     let mut lines = reader.lines(); // split incoming streams into lines (each line is a stringstream)
@@ -68,8 +73,20 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         None => Err("peer disconnected immediately")?,
         Some(line) => line?,
     };
-    println!("new user created: \"{}\"", name);
-    let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
+
+    if is_new_user(&name) {
+        println!("new user created: \"{}\"", name);
+        let t_name = name.clone();
+        // basically, I'm not using async postgresql, so to avoid blocking the app I spawn a separate thread
+        std::thread::spawn(move || {
+            save_user(&*t_name).expect("TODO: panic message");
+        });
+        USERS_IN_DB.lock().unwrap().push(name.clone());
+    } else {
+        println!("An old user is back! his username is: \"{}\"", name);
+    }
+
+    let (shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
     broker
         .send(Event::NewPeer {
             name: name.clone(),
@@ -152,7 +169,6 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
         mpsc::unbounded::<(String, Receiver<String>)>();
     let mut peers: HashMap<String, Sender<String>> = HashMap::new(); // maintaining all peers (users)
     let mut events = events.fuse();
-
     loop {
         let event = select! {
             event = events.next().fuse() => match event {
@@ -170,8 +186,15 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
                 for addr in to {
                     if let Some(peer) = peers.get_mut(&addr) {
                         println!("a Message was sent by \"{}\" to \"{}\"", from, addr);
-                        let msg = format!("Message from \"{}\": {}\n", from, msg);
-                        peer.send(msg).await.unwrap()
+                        let formatted_msg = format!("Message from \"{}\": {}\n", from, msg);
+                        peer.send(formatted_msg).await.unwrap();
+                        // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
+                        match save_message(from.clone(), addr.clone(), msg.clone()) {
+                            Ok(_) => (),
+                            Err(e) => {
+                                eprintln!("Thread Error writing a Message to Database: {}", e)
+                            }
+                        }
                     }
                 }
             }
@@ -204,6 +227,119 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
     Ok(())
 }
 
+lazy_static! {
+    static ref DB_CONNECTION: Mutex<Client> = Mutex::new(
+        Client::connect(
+            "host=localhost port=7777 user=postgres password=mysecretpassword dbname=postgres",
+            NoTls
+        )
+        .unwrap()
+    );
+    static ref USERS_NOW: HashMap<String, Sender<String>> = HashMap::new();
+    static ref USERS_IN_DB: Mutex<Vec<String>> = Mutex::new(load_users());
+}
+
+fn load_users() -> Vec<String> {
+    let mut db = DB_CONNECTION.lock().unwrap();
+    let mut names = Vec::new();
+
+    for row in db.query("SELECT name FROM users", &[]).unwrap() {
+        let name: String = row.get(0);
+        names.push(name);
+    }
+
+    names
+}
+
+fn is_new_user(name: &str) -> bool {
+    !USERS_IN_DB.lock().unwrap().contains(&name.to_string())
+}
+
+fn save_user(name: &str) -> Result<()> {
+    let mut db = DB_CONNECTION.lock().unwrap();
+
+    // Prepare the SQL statement to insert a new user into the 'users' table
+    let statement = db.prepare("INSERT INTO users (name) VALUES ($1)")?;
+
+    // Execute the SQL statement with the user's name as a parameter
+    db.execute(&statement, &[&name])?;
+
+    Ok(())
+}
+
+fn save_message(
+    from: String,
+    to: String,
+    msg: String,
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match std::thread::spawn(move || {
+        let mut db = DB_CONNECTION.lock().unwrap();
+        match db.execute(
+            "INSERT INTO messages (sender, receiver, message) VALUES ($1, $2, $3)",
+            &[&from, &to, &msg],
+        ) {
+            Ok(_) => (),
+            Err(e) => eprintln!("HOW? {}", e),
+        }
+    })
+    .join()
+    {
+        Ok(_) => Ok(()),
+        Err(_) => Err("Error".into()),
+    }
+}
+
 pub(crate) fn main() -> Result<()> {
     task::block_on(accept_loop("127.0.0.1:8888"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /*Server tests*/
+    #[test]
+    fn test_spawn_and_log_error() {
+        let fut = async { Ok(()) };
+        task::block_on(async {
+            spawn_and_log_error(fut).await;
+        });
+    }
+
+    #[test]
+    fn test_broker_loop() {
+        task::block_on(async {
+            let (sender, receiver) = mpsc::unbounded::<Event>();
+            assert!(broker_loop(receiver).await.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_load_users() {
+        let users = load_users();
+        assert!(!users.is_empty());
+    }
+
+    #[test]
+    fn test_is_new_user() {
+        assert_eq!(is_new_user("Bob"), true);
+        assert_eq!(is_new_user("Alice"), true);
+        assert_eq!(is_new_user("Bob"), false);
+        assert_eq!(is_new_user("Alice"), false);
+    }
+
+    #[test]
+    fn test_save_user() {
+        let user = "NewTestUser";
+        assert!(save_user(user).is_ok());
+        assert!(!is_new_user(user));
+    }
+
+    #[test]
+    fn test_save_message() {
+        let from = "Alice";
+        let to = "Bob";
+        let msg = "Hello Bob";
+        assert!(save_message(from.to_string(), to.to_string(), msg.to_string()).is_ok());
+    }
 }
