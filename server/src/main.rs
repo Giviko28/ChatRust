@@ -292,14 +292,18 @@ fn get_messages(from: &str, to: &str) -> Result<String> {
     let mut db = DB_CONNECTION.lock().unwrap();
 
     // Prepare the SQL statement to select messages with specified sender and receiver
-    let mut statement = db.prepare("SELECT message FROM messages WHERE sender = $1 AND receiver = $2")?;
+    let mut statement = db.prepare("SELECT * FROM messages
+                                   WHERE (sender = $1 AND receiver = $2)
+                                   OR (sender = $2 AND receiver = $1)")?;
 
     // Execute the query and collect results
     let res = db.query(&statement, &[&from, &to])?;
     let mut message = String::new();
     for row in res {
         let msg: &str = row.get("message");
-        let msg: String = format!("message received {} from {} \n", msg, to);
+        let fromSql: &str = row.get("sender");
+        let toSql: &str = row.get("receiver");
+        let msg: String = format!("message received {} from {} to {} \n", msg, fromSql, toSql);
         message.push_str(&msg);
     }
 
