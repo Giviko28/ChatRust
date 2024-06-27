@@ -22,14 +22,10 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
-use postgres::{Client, NoTls};
+use postgres::{Client, NoTls, row};
 use std::sync::Mutex;
 
-use std::{
-    collections::hash_map::{Entry, HashMap},
-    future::Future,
-    sync::Arc,
-};
+use std::{collections::hash_map::{Entry, HashMap}, future::Future, sync::Arc, thread};
 
 fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()>
 // logging errors but continuing maintaining the server
@@ -67,7 +63,6 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
     let stream = Arc::new(stream);
     let reader = BufReader::new(&*stream); // incoming stream is read
     let mut lines = reader.lines(); // split incoming streams into lines (each line is a stringstream)
-
     let name = match lines.next().await {
         // first line is read
         None => Err("peer disconnected immediately")?,
@@ -100,7 +95,15 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         let line = line?;
         let (dest, msg) = match line.find(':') {
             // parsing each line into into destination list and message (The message format is -> Bob: Hello Bob)
-            None => continue,
+            None => {
+                broker.send(
+                    Event::DisplayMessages {
+                        from: name.clone(),
+                        to: line
+                    }
+                ).await.unwrap();
+                continue
+            },
             Some(idx) => (&line[..idx], line[idx + 1..].trim()),
         };
         let dest: Vec<String> = dest
@@ -161,6 +164,10 @@ enum Event {
         to: Vec<String>,
         msg: String,
     },
+    DisplayMessages {
+        from: String,
+        to: String
+    }
 }
 
 async fn broker_loop(events: Receiver<Event>) -> Result<()> {
@@ -219,6 +226,20 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
                     });
                 }
             },
+            Event::DisplayMessages {
+                from,
+                to
+            } => if let Some(peer) = peers.get_mut(&from) {
+                match get_messages(&from, &to) {
+                    Ok(messages) => {
+                        println!("a list of messages retrieved from \"{}\" to \"{}\"", &from, &to);
+                        peer.send(messages).await.unwrap();
+                    }
+                    Err(e) => {
+                        eprintln!("Error retrieving messages from database: {}", e);
+                    }
+                }
+            }
         }
     }
     drop(peers);
@@ -265,6 +286,33 @@ fn save_user(name: &str) -> Result<()> {
     db.execute(&statement, &[&name])?;
 
     Ok(())
+}
+
+fn get_messages(from: &str, to: &str) -> Result<String> {
+    let mut db = DB_CONNECTION.lock().unwrap();
+
+    // Prepare the SQL statement to select messages with specified sender and receiver
+    let mut statement = db.prepare("SELECT message FROM messages WHERE sender = $1 AND receiver = $2")?;
+
+    // Execute the query and collect results
+    let res = db.query(&statement, &[&from, &to])?;
+    let mut message = String::new();
+    for row in res {
+        let msg: &str = row.get("message");
+        let msg: String = format!("message received {} from {} \n", msg, to);
+        message.push_str(&msg);
+    }
+
+
+    // let mut messages = String::new();
+    //
+    // while let Some(row) = rows.next()? {
+    //     let message: String = row.get(0)?;
+    //     messages.push_str(&message);
+    //     messages.push('\n');
+    // }
+
+    Ok((message))
 }
 
 fn save_message(
