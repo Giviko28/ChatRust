@@ -303,7 +303,7 @@ fn get_messages(from: &str, to: &str) -> Result<String> {
         let msg: &str = row.get("message");
         let fromSql: &str = row.get("sender");
         let toSql: &str = row.get("receiver");
-        let msg: String = format!("message received {} from {} to {} \n", msg, fromSql, toSql);
+        let msg: String = format!("{}:{} \n", fromSql, msg);
         message.push_str(&msg);
     }
 

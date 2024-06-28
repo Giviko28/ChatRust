@@ -23,11 +23,12 @@ fn main() {
 }
 */
 
+use std::sync::mpsc::Sender;
 use crossterm::{
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     ExecutableCommand,
 };
-use futures::select;
+use futures::{select, SinkExt};
 use futures::FutureExt;
 
 use async_std::{
@@ -36,6 +37,9 @@ use async_std::{
     prelude::*,
     task,
 };
+use async_std::channel::Receiver;
+use futures::channel::mpsc;
+use futures::channel::mpsc::UnboundedSender;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -56,6 +60,7 @@ async fn try_main(addr: impl ToSocketAddrs) -> Result<()> {
             line = lines_from_server.next().fuse() => match line {
                 Some(line) => {
                     let _line = line?;
+                    // sender.clone().send(String::from("message")).await.unrap();
                     std::io::stdout()
                     .execute(SetForegroundColor(Color::Black))
                     .unwrap()
