@@ -12,11 +12,10 @@ extern crate async_std;
 #[macro_use]
 extern crate lazy_static;
 use async_std::{
-    io::BufReader,
-    net::TcpStream,
-    net::{TcpListener, ToSocketAddrs}, // a non-blocking tcp-listener (uses async API)
-    prelude::*,                        // needed to work with futures and streams
-    task, // a lightweight alternative to a thread (a thread can have many tasks)
+    io::{BufReader, Chain},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
+    prelude::*, // needed to work with futures and streams
+    task,       // a lightweight alternative to a thread (a thread can have many tasks)
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -42,7 +41,10 @@ where
 {
     task::spawn(async move {
         if let Err(e) = fut.await {
-            eprintln!("{}", e)
+            //eprintln!("{}", e);
+            unsafe {
+                CHAT_UI.as_mut().unwrap().push_error(e.to_string().into());
+            }
         }
     })
 }
@@ -85,7 +87,13 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
     };
 
     if is_new_user(&name) {
-        println!("new user created: \"{}\"", name);
+        //println!("new user created: \"{}\"", name);
+        unsafe {
+            CHAT_UI
+                .as_mut()
+                .unwrap()
+                .push_message(format!("new user created: \"{}\"", name).into())
+        }
         let t_name = name.clone();
         // basically, I'm not using async postgresql, so to avoid blocking the app I spawn a separate thread
         let _join_handle = std::thread::spawn(move || save_user(&t_name));
@@ -122,7 +130,13 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
         })
         .await
         .map_err(|e| {
-            eprintln!("Failed to send NewPeer event: {}", e);
+            unsafe {
+                CHAT_UI
+                    .as_mut()
+                    .unwrap()
+                    .push_error(format!("Failed to send NewPeer event: {}", e).into())
+            }
+            //eprintln!("Failed to send NewPeer event: {}", e);
         })
         .ok();
 
@@ -147,7 +161,13 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
             })
             .await
             .map_err(|e| {
-                eprintln!("Failed to send Message: {}", e);
+                unsafe {
+                    CHAT_UI
+                        .as_mut()
+                        .unwrap()
+                        .push_error(format!("Failed to send Message: {}", e).into())
+                }
+                //eprintln!("Failed to send Message: {}", e);
             })
             .ok();
     }
@@ -212,7 +232,12 @@ async fn broker_loop(events: Receiver<MessageEvent>) -> Result<()> {
                 //let (name, _pending_messages) = disconnect.unwrap();
                 let (name, _) = disconnect.expect("Failed to disconnect");
                 if peers.remove(&name).is_none() {
-                    eprintln!("User with name '{}' not found in the userlist", name);
+                    unsafe{
+                        CHAT_UI.as_mut().unwrap().push_error(
+                            format!("User '{}' already connected", name).into(),
+                        )
+                    }
+                    //eprintln!("User with name '{}' not found in the userlist", name);
                 }
                 continue;
             },
