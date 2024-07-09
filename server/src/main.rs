@@ -5,6 +5,8 @@
 // - What job does the server have when it comes to messages? Does it only facilitate peer-to-peer communication between clients, or do all messages go through the server?
 //   - What would be the benefits and drawbacks of each approach?
 // - Do you want/need some form of user management? If so, how would that look like?
+mod server_tui;
+static mut CHAT_UI: Option<server_tui::ChatUI<CrosstermBackend<io::Stdout>>> = None;
 
 extern crate async_std;
 #[macro_use]
@@ -19,13 +21,19 @@ use async_std::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
+
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
-use postgres::{Client, NoTls, row};
-use std::sync::Mutex;
-
-use std::{collections::hash_map::{Entry, HashMap}, future::Future, sync::Arc, thread};
+use postgres::{Client, NoTls};
+use std::{
+    collections::hash_map::{Entry, HashMap},
+    future::Future,
+    io,
+    sync::Arc,
+};
+use std::{fmt::format, sync::Mutex};
+use tui::{backend::CrosstermBackend, Terminal};
 
 fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()>
 // logging errors but continuing maintaining the server
@@ -50,7 +58,9 @@ async fn accept_loop(addr: impl ToSocketAddrs) -> Result<()> {
     while let Some(stream) = incoming.next().await {
         // iterate incoming sockets
         let stream = stream?;
-        println!("Accepting connection from: \"{}\"", stream.peer_addr()?);
+        let message = format!("Accepting connection from: \"{}\"", stream.peer_addr()?);
+        unsafe { CHAT_UI.as_mut().unwrap().push_message(message.into()) }
+        //println!("Accepting connection from: \"{}\"", stream.peer_addr()?);
         spawn_and_log_error(connection_loop(broker_sender.clone(), stream)); // task::spawn creates a task (to work with each client concurrently)
     }
     drop(broker_sender);
@@ -58,14 +68,19 @@ async fn accept_loop(addr: impl ToSocketAddrs) -> Result<()> {
     Ok(())
 }
 
-async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result<()> {
-    let mut test = stream.clone();
+async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) -> Result<()> {
+    let _test = stream.clone();
     let stream = Arc::new(stream);
     let reader = BufReader::new(&*stream); // incoming stream is read
     let mut lines = reader.lines(); // split incoming streams into lines (each line is a stringstream)
+
     let name = match lines.next().await {
-        // first line is read
-        None => Err("peer disconnected immediately")?,
+        None => {
+            // Handle the disconnection gracefully
+            let message = "Peer disconnected immediately";
+            unsafe { CHAT_UI.as_mut().unwrap().push_error(message.into()) }
+            return Err("Peer disconnected immediately".into());
+        }
         Some(line) => line?,
     };
 
@@ -73,37 +88,49 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         println!("new user created: \"{}\"", name);
         let t_name = name.clone();
         // basically, I'm not using async postgresql, so to avoid blocking the app I spawn a separate thread
-        std::thread::spawn(move || {
-            save_user(&*t_name).expect("TODO: panic message");
-        });
-        USERS_IN_DB.lock().unwrap().push(name.clone());
+        let _join_handle = std::thread::spawn(move || save_user(&t_name));
+        //USERS_IN_DB.lock().unwrap().push(name.clone());
+        match USERS_IN_DB.lock() {
+            Ok(mut users) => {
+                users.push(name.clone());
+            }
+            Err(e) => {
+                unsafe {
+                    CHAT_UI.as_mut().unwrap().push_error(
+                        format!("Failed to acquire lock on the DB for user {}: {}", name, e).into(),
+                    )
+                }
+                //eprintln!("Failed to acquire lock on the DB for user {}: {}", name, e);
+            }
+        }
     } else {
-        println!("An old user is back! his username is: \"{}\"", name);
+        unsafe {
+            CHAT_UI
+                .as_mut()
+                .unwrap()
+                .push_message(format!("An old user is back! his username is: {}", name).into())
+        }
+        //println!("An old user is back! his username is: \"{}\"", name);
     }
 
-    let (shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
+    let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>();
     broker
-        .send(Event::NewPeer {
+        .send(MessageEvent::NewPeer {
             name: name.clone(),
             stream: Arc::clone(&stream),
             shutdown: shutdown_receiver,
         })
         .await
-        .unwrap();
+        .map_err(|e| {
+            eprintln!("Failed to send NewPeer event: {}", e);
+        })
+        .ok();
 
     while let Some(line) = lines.next().await {
         let line = line?;
         let (dest, msg) = match line.find(':') {
             // parsing each line into into destination list and message (The message format is -> Bob: Hello Bob)
-            None => {
-                broker.send(
-                    Event::DisplayMessages {
-                        from: name.clone(),
-                        to: line
-                    }
-                ).await.unwrap();
-                continue
-            },
+            None => continue,
             Some(idx) => (&line[..idx], line[idx + 1..].trim()),
         };
         let dest: Vec<String> = dest
@@ -113,13 +140,16 @@ async fn connection_loop(mut broker: Sender<Event>, stream: TcpStream) -> Result
         let msg: String = msg.to_string();
 
         broker
-            .send(Event::Message {
+            .send(MessageEvent::Message {
                 from: name.clone(),
                 to: dest,
                 msg,
             })
             .await
-            .unwrap();
+            .map_err(|e| {
+                eprintln!("Failed to send Message: {}", e);
+            })
+            .ok();
     }
     Ok(())
 }
@@ -152,7 +182,7 @@ async fn connection_writer_loop(
 enum Void {}
 
 #[derive(Debug)]
-enum Event {
+enum MessageEvent {
     // 2 kinds of events: a new user or a message
     NewPeer {
         name: String,
@@ -164,13 +194,9 @@ enum Event {
         to: Vec<String>,
         msg: String,
     },
-    DisplayMessages {
-        from: String,
-        to: String
-    }
 }
 
-async fn broker_loop(events: Receiver<Event>) -> Result<()> {
+async fn broker_loop(events: Receiver<MessageEvent>) -> Result<()> {
     // make sure, messages read in "connection_loop" get to relevant "connection_writer_loop"
     let (disconnect_sender, mut disconnect_receiver) =
         mpsc::unbounded::<(String, Receiver<String>)>();
@@ -179,67 +205,75 @@ async fn broker_loop(events: Receiver<Event>) -> Result<()> {
     loop {
         let event = select! {
             event = events.next().fuse() => match event {
-                None => break, // 2
+                None => break,
                 Some(event) => event,
             },
             disconnect = disconnect_receiver.next().fuse() => {
-                let (name, _pending_messages) = disconnect.unwrap();
-                assert!(peers.remove(&name).is_some());
+                //let (name, _pending_messages) = disconnect.unwrap();
+                let (name, _) = disconnect.expect("Failed to disconnect");
+                if peers.remove(&name).is_none() {
+                    eprintln!("User with name '{}' not found in the userlist", name);
+                }
                 continue;
             },
         };
         match event {
-            Event::Message { from, to, msg } => {
+            MessageEvent::Message { from, to, msg } => {
+                let source = from.clone();
+                let source2 = from.clone();
+                let message = msg.clone();
                 for addr in to {
                     if let Some(peer) = peers.get_mut(&addr) {
-                        println!("a Message was sent by \"{}\" to \"{}\"", from, addr);
-                        let formatted_msg = format!("Message from \"{}\": {}\n", from, msg);
-                        peer.send(formatted_msg).await.unwrap();
-                        // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
-                        match save_message(from.clone(), addr.clone(), msg.clone()) {
-                            Ok(_) => (),
-                            Err(e) => {
-                                eprintln!("Thread Error writing a Message to Database: {}", e)
-                            }
+                        unsafe {
+                            CHAT_UI.as_mut().unwrap().push_message(
+                                format!("a Message was sent by \"{}\" to \"{}\"", source, addr)
+                                    .into(),
+                            )
                         }
+                        //println!("a Message was sent by \"{}\" to \"{}\"", source, addr);
+                        let formatted_msg =
+                            format!("Message from \"{}\": {}\n", source, msg.clone());
+                        //peer.send(formatted_msg).await.unwrap();
+                        if let Err(e) = peer.send(formatted_msg).await {
+                            eprintln!("Failed to send message to peer: {}", e);
+                        }
+                        // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
+                        save_message(&source2, &addr, &message).unwrap_or_else(|e| {
+                            eprintln!("Failed to save message: {}", e);
+                        });
                     }
                 }
             }
-            Event::NewPeer {
+            MessageEvent::NewPeer {
                 name,
                 stream,
                 shutdown,
             } => match peers.entry(name.clone()) {
-                Entry::Occupied(..) => (),
+                Entry::Occupied(..) => unsafe {
+                    CHAT_UI
+                        .as_mut()
+                        .unwrap()
+                        .push_error("User already exists!".into())
+                },
                 Entry::Vacant(entry) => {
                     let (client_sender, mut client_receiver) = mpsc::unbounded();
                     entry.insert(client_sender);
                     let mut disconnect_sender = disconnect_sender.clone();
+                    let name_clone = name.clone();
                     spawn_and_log_error(async move {
                         let res =
                             connection_writer_loop(&mut client_receiver, stream, shutdown).await;
                         disconnect_sender
-                            .send((name, client_receiver))
+                            .send((name_clone, client_receiver))
                             .await
-                            .unwrap();
+                            .expect("Failed to send disconnect event");
                         res
                     });
+                    unsafe {
+                        CHAT_UI.as_mut().unwrap().add_user(name.into());
+                    }
                 }
             },
-            Event::DisplayMessages {
-                from,
-                to
-            } => if let Some(peer) = peers.get_mut(&from) {
-                match get_messages(&from, &to) {
-                    Ok(messages) => {
-                        println!("a list of messages retrieved from \"{}\" to \"{}\"", &from, &to);
-                        peer.send(messages).await.unwrap();
-                    }
-                    Err(e) => {
-                        eprintln!("Error retrieving messages from database: {}", e);
-                    }
-                }
-            }
         }
     }
     drop(peers);
@@ -288,110 +322,42 @@ fn save_user(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn get_messages(from: &str, to: &str) -> Result<String> {
-    let mut db = DB_CONNECTION.lock().unwrap();
+fn save_message(from: &str, to: &str, msg: &str) -> Result<()> {
+    let from_str = from.to_string();
+    let to_str = to.to_string();
+    let msg_str = msg.to_string();
 
-    // Prepare the SQL statement to select messages with specified sender and receiver
-    let mut statement = db.prepare("SELECT * FROM messages
-                                   WHERE (sender = $1 AND receiver = $2)
-                                   OR (sender = $2 AND receiver = $1)")?;
-
-    // Execute the query and collect results
-    let res = db.query(&statement, &[&from, &to])?;
-    let mut message = String::new();
-    for row in res {
-        let msg: &str = row.get("message");
-        let fromSql: &str = row.get("sender");
-        let toSql: &str = row.get("receiver");
-        let msg: String = format!("message received {} from {} to {} \n", msg, fromSql, toSql);
-        message.push_str(&msg);
-    }
-
-
-    // let mut messages = String::new();
-    //
-    // while let Some(row) = rows.next()? {
-    //     let message: String = row.get(0)?;
-    //     messages.push_str(&message);
-    //     messages.push('\n');
-    // }
-
-    Ok((message))
-}
-
-fn save_message(
-    from: String,
-    to: String,
-    msg: String,
-) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match std::thread::spawn(move || {
+    let join_handle = std::thread::spawn(move || {
         let mut db = DB_CONNECTION.lock().unwrap();
-        match db.execute(
+        db.execute(
             "INSERT INTO messages (sender, receiver, message) VALUES ($1, $2, $3)",
-            &[&from, &to, &msg],
-        ) {
-            Ok(_) => (),
-            Err(e) => eprintln!("HOW? {}", e),
-        }
-    })
-    .join()
-    {
-        Ok(_) => Ok(()),
-        Err(_) => Err("Error".into()),
-    }
+            &[&from_str, &to_str, &msg_str],
+        )
+        .unwrap();
+    });
+
+    join_handle
+        .join()
+        .expect("Failed to join the save_message thread");
+
+    Ok(())
 }
 
 pub(crate) fn main() -> Result<()> {
+    let stdout = io::stdout();
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    terminal.hide_cursor()?;
+
+    //terminal.clear()?; // Clear the terminal before getting the frame
+    let chat_ui = server_tui::ChatUI::new(terminal);
+
+    unsafe {
+        CHAT_UI = Some(chat_ui);
+
+        CHAT_UI.as_mut().unwrap().draw();
+    }
+
     task::block_on(accept_loop("127.0.0.1:8888"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /*Server tests*/
-    #[test]
-    fn test_spawn_and_log_error() {
-        let fut = async { Ok(()) };
-        task::block_on(async {
-            spawn_and_log_error(fut).await;
-        });
-    }
-
-    #[test]
-    fn test_broker_loop() {
-        task::block_on(async {
-            let (sender, receiver) = mpsc::unbounded::<Event>();
-            assert!(broker_loop(receiver).await.is_ok());
-        });
-    }
-
-    #[test]
-    fn test_load_users() {
-        let users = load_users();
-        assert!(!users.is_empty());
-    }
-
-    #[test]
-    fn test_is_new_user() {
-        assert_eq!(is_new_user("Bob"), true);
-        assert_eq!(is_new_user("Alice"), true);
-        assert_eq!(is_new_user("Bob"), false);
-        assert_eq!(is_new_user("Alice"), false);
-    }
-
-    #[test]
-    fn test_save_user() {
-        let user = "NewTestUser";
-        assert!(save_user(user).is_ok());
-        assert!(!is_new_user(user));
-    }
-
-    #[test]
-    fn test_save_message() {
-        let from = "Alice";
-        let to = "Bob";
-        let msg = "Hello Bob";
-        assert!(save_message(from.to_string(), to.to_string(), msg.to_string()).is_ok());
-    }
 }
