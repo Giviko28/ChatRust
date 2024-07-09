@@ -12,7 +12,7 @@ extern crate async_std;
 #[macro_use]
 extern crate lazy_static;
 use async_std::{
-    io::{BufReader, Chain},
+    io::BufReader,
     net::{TcpListener, TcpStream, ToSocketAddrs},
     prelude::*, // needed to work with futures and streams
     task,       // a lightweight alternative to a thread (a thread can have many tasks)
@@ -25,13 +25,13 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::{select, FutureExt};
 use postgres::{Client, NoTls};
+use std::sync::Mutex;
 use std::{
     collections::hash_map::{Entry, HashMap},
     future::Future,
     io,
     sync::Arc,
 };
-use std::{fmt::format, sync::Mutex};
 use tui::{backend::CrosstermBackend, Terminal};
 
 fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()>
@@ -239,6 +239,9 @@ async fn broker_loop(events: Receiver<MessageEvent>) -> Result<()> {
                     }
                     //eprintln!("User with name '{}' not found in the userlist", name);
                 }
+                unsafe{
+                    CHAT_UI.as_mut().unwrap().delete_user(&name);
+                }
                 continue;
             },
         };
@@ -260,11 +263,22 @@ async fn broker_loop(events: Receiver<MessageEvent>) -> Result<()> {
                             format!("Message from \"{}\": {}\n", source, msg.clone());
                         //peer.send(formatted_msg).await.unwrap();
                         if let Err(e) = peer.send(formatted_msg).await {
-                            eprintln!("Failed to send message to peer: {}", e);
+                            unsafe {
+                                CHAT_UI.as_mut().unwrap().push_error(
+                                    format!("Failed to send message to peer: {}", e).into(),
+                                )
+                            }
+                            //eprintln!("Failed to send message to peer: {}", e);
                         }
                         // i tried passing by reference and it started complaining about lifetimes, aint no way im fixing that
                         save_message(&source2, &addr, &message).unwrap_or_else(|e| {
-                            eprintln!("Failed to save message: {}", e);
+                            unsafe {
+                                CHAT_UI
+                                    .as_mut()
+                                    .unwrap()
+                                    .push_error(format!("Failed to save message: {}", e).into())
+                            }
+                            //eprintln!("Failed to save message: {}", e);
                         });
                     }
                 }
