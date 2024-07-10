@@ -1,1 +1,1 @@
-workspace = { members = [ "client","common", "server", "database"], resolver = "2" }
+workspace = { members = [ "client","common", "server", "database", "eframe_template"], resolver = "2" }
